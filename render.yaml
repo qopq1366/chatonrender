@@ -10,4 +10,14 @@ services:
         generateValue: true
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: 43200
+      - key: INTEGRATION_API_KEY
+        generateValue: true
+      - key: TELEGRAM_BOT_USERNAME
+        value: "@change-me-bot"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: LOGIN_CODE_TTL_MINUTES
+        value: 5
+      - key: TG_LINK_CODE_TTL_MINUTES
+        value: 5
 

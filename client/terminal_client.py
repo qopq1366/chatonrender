@@ -1,10 +1,15 @@
 import json
+import threading
+import time
 from pathlib import Path
 
 import requests
 
 BASE_URL = "http://127.0.0.1:8000"
 TOKEN_PATH = Path.home() / ".chatonrender_token"
+RENDER_AWAKE_CHECKED = False
+KEEPALIVE_STARTED = False
+STOP_EVENT = threading.Event()
 
 
 def load_token() -> str | None:
@@ -29,7 +34,52 @@ def headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def is_render_server() -> bool:
+    return "onrender.com" in BASE_URL.lower()
+
+
+def warmup_render_if_needed() -> None:
+    global RENDER_AWAKE_CHECKED
+    if not is_render_server() or RENDER_AWAKE_CHECKED:
+        return
+
+    print("Render просыпается, подождите...")
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        try:
+            response = requests.get(f"{BASE_URL}/health", timeout=15)
+            if response.status_code == 200:
+                print("Render уже проснулся.")
+                RENDER_AWAKE_CHECKED = True
+                return
+        except requests.RequestException:
+            pass
+        time.sleep(3)
+
+    raise RuntimeError("Render долго не отвечает. Попробуйте снова через минуту.")
+
+
+def keepalive_loop():
+    while not STOP_EVENT.is_set():
+        if is_render_server():
+            try:
+                requests.get(f"{BASE_URL}/health", timeout=15)
+            except requests.RequestException:
+                pass
+        STOP_EVENT.wait(45)
+
+
+def start_keepalive_once():
+    global KEEPALIVE_STARTED
+    if KEEPALIVE_STARTED:
+        return
+    thread = threading.Thread(target=keepalive_loop, daemon=True)
+    thread.start()
+    KEEPALIVE_STARTED = True
+
+
 def call(method: str, path: str, **kwargs):
+    warmup_render_if_needed()
     url = f"{BASE_URL}{path}"
     response = requests.request(method, url, timeout=20, **kwargs)
     if response.status_code >= 400:
@@ -65,6 +115,34 @@ def cmd_login(args: list[str]):
     data = call("POST", "/auth/login", json={"username": username, "password": password})
     save_token(data["access_token"])
     print("login successful")
+
+
+def cmd_add_tg(args: list[str]):
+    if len(args) != 0:
+        print("usage: /add-tg")
+        return
+    result = call("POST", "/tg/add/request", headers=headers())
+    print(f"telegram bot: {result['bot_username']}")
+    print(f"link code: {result['link_code']}")
+    print("Откройте Telegram бота и отправьте команду:")
+    print(f"/link {result['link_code']}")
+    print("После этого проверьте статус командой /manage-tg")
+
+
+def cmd_manage_tg(args: list[str]):
+    if not load_token():
+        print("Сначала выполните login.")
+        return
+    if len(args) == 0:
+        data = call("GET", "/tg/manage", headers=headers())
+        print_json(data)
+        return
+    if len(args) != 1 or args[0] not in {"on", "off"}:
+        print("usage: /manage-tg [on|off]")
+        return
+    enabled = args[0] == "on"
+    data = call("POST", "/tg/manage", headers=headers(), json={"enabled": enabled})
+    print_json(data)
 
 
 def cmd_logout(_: list[str]):
@@ -108,11 +186,12 @@ def cmd_inbox(args: list[str]):
 
 
 def cmd_set_server(args: list[str]):
-    global BASE_URL
+    global BASE_URL, RENDER_AWAKE_CHECKED
     if len(args) != 1:
         print("usage: server <base_url>")
         return
     BASE_URL = args[0].rstrip("/")
+    RENDER_AWAKE_CHECKED = False
     print(f"server set to {BASE_URL}")
 
 
@@ -122,6 +201,8 @@ def help_text():
     print("  server <base_url>")
     print("  register <username> <password>")
     print("  login <username> <password>")
+    print("  /add-tg                      # get code and send it to bot")
+    print("  /manage-tg [on|off]          # show/toggle Telegram link")
     print("  logout")
     print("  me")
     print("  send <recipient> <message>")
@@ -136,6 +217,8 @@ COMMANDS = {
     "register": cmd_register,
     "login": cmd_login,
     "logout": cmd_logout,
+    "add-tg": cmd_add_tg,
+    "manage-tg": cmd_manage_tg,
     "me": cmd_me,
     "send": cmd_send,
     "history": cmd_history,
@@ -144,17 +227,21 @@ COMMANDS = {
 
 
 def main():
+    start_keepalive_once()
     print("ChatOnRender terminal client. Type 'help' for commands.")
     while True:
         raw = input("> ").strip()
         if not raw:
             continue
         if raw in {"exit", "quit"}:
+            STOP_EVENT.set()
             print("bye")
             return
 
         parts = raw.split()
         command, args = parts[0], parts[1:]
+        if command.startswith("/"):
+            command = command[1:]
         handler = COMMANDS.get(command)
         if handler is None:
             print("unknown command")
