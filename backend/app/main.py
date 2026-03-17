@@ -60,7 +60,7 @@ def json_error(status_code: int, detail: str):
 
 
 def telegram_api(method: str, payload: dict):
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    token = settings.telegram_bot_token.strip()
     if not token:
         return None
     url = f"https://api.telegram.org/bot{token}/{method}"
@@ -160,7 +160,7 @@ def process_telegram_update(update: dict):
 
 
 def telegram_bot_loop():
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    token = settings.telegram_bot_token.strip()
     if not token:
         return
     offset = 0
@@ -191,7 +191,7 @@ def start_telegram_bot_once():
     global _TELEGRAM_BOT_THREAD_STARTED
     if _TELEGRAM_BOT_THREAD_STARTED:
         return
-    if not os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
+    if not settings.telegram_bot_token.strip():
         return
     thread = threading.Thread(target=telegram_bot_loop, daemon=True)
     thread.start()
