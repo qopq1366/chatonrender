@@ -1,13 +1,24 @@
 from functools import wraps
+import os
+import sys
 
 import jwt
 from flask import Flask, jsonify, request
 from sqlalchemy import and_, desc, or_
 
-from .auth import create_access_token, decode_token, hash_password, verify_password
-from .config import settings
-from .database import Base, SessionLocal, engine
-from .models import Message, User
+if __package__ in (None, ""):
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from backend.app.auth import create_access_token, decode_token, hash_password, verify_password
+    from backend.app.config import settings
+    from backend.app.database import Base, SessionLocal, engine
+    from backend.app.models import Message, User
+else:
+    from .auth import create_access_token, decode_token, hash_password, verify_password
+    from .config import settings
+    from .database import Base, SessionLocal, engine
+    from .models import Message, User
 
 Base.metadata.create_all(bind=engine)
 
