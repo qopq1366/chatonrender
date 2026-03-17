@@ -51,6 +51,21 @@ def fetch_login_codes(after_id: int):
     return response.json()
 
 
+def fetch_tg_link_codes(after_id: int):
+    url = f"{BACKEND_DOMAIN}/integrations/tg-link-codes"
+    response = requests.get(
+        url,
+        params={"after_id": after_id, "limit": 100},
+        headers={"X-Server-Key": SERVER_KEY},
+        timeout=20,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"backend tg link codes failed: {response.status_code} {response.text[:300]}"
+        )
+    return response.json()
+
+
 def validate_env():
     missing = [
         name
@@ -69,7 +84,8 @@ def main():
     validate_env()
     print(f"Telegram notifier started. backend={BACKEND_DOMAIN}")
     last_event_id = 0
-    last_code_id = 0
+    last_login_code_id = 0
+    last_tg_link_code_id = 0
 
     while True:
         try:
@@ -84,8 +100,8 @@ def main():
                 send_telegram(text)
                 last_event_id = max(last_event_id, int(event["id"]))
 
-            codes = fetch_login_codes(last_code_id)
-            for item in codes:
+            login_codes = fetch_login_codes(last_login_code_id)
+            for item in login_codes:
                 text = (
                     "Login code request\n"
                     f"user: {item['username']}\n"
@@ -93,7 +109,18 @@ def main():
                     "Введите код в terminal client."
                 )
                 send_telegram(text)
-                last_code_id = max(last_code_id, int(item["id"]))
+                last_login_code_id = max(last_login_code_id, int(item["id"]))
+
+            tg_link_codes = fetch_tg_link_codes(last_tg_link_code_id)
+            for item in tg_link_codes:
+                text = (
+                    "TG account link request\n"
+                    f"user: {item['username']}\n"
+                    f"code: {item['code']}\n"
+                    "Введите код в terminal client через /add-tg."
+                )
+                send_telegram(text)
+                last_tg_link_code_id = max(last_tg_link_code_id, int(item["id"]))
         except Exception as exc:
             print(f"notifier error: {exc}")
 

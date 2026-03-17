@@ -139,29 +139,31 @@ def cmd_login(args: list[str]):
 
 
 def cmd_add_tg(args: list[str]):
-    if len(args) == 2:
-        username, password = args
-    elif len(args) == 0 and LAST_USERNAME and LAST_PASSWORD:
-        username, password = LAST_USERNAME, LAST_PASSWORD
-    elif len(args) == 0:
-        username = input("username: ").strip()
-        password = input("password: ").strip()
-    else:
-        print("usage: /add-tg [username password]")
+    if len(args) != 0:
+        print("usage: /add-tg")
         return
-
-    login_with_bot_code(username, password)
+    result = call("POST", "/tg/add/request", headers=headers())
+    print(f"telegram bot: {result['bot_username']}")
+    print("Введите код из бота (действует 5 минут).")
+    code = input("tg link code: ").strip()
+    call("POST", "/tg/add/confirm", headers=headers(), json={"code": code})
     print("telegram account linked")
 
 
-def cmd_manage_tg(_: list[str]):
+def cmd_manage_tg(args: list[str]):
     if not load_token():
-        print("Сначала выполните /add-tg или login.")
+        print("Сначала выполните login.")
         return
-    print("Telegram linked.")
-    print("Доступные действия (через клиент):")
-    print("- /manage-tg  (показать статус)")
-    print("- logout      (выйти из аккаунта)")
+    if len(args) == 0:
+        data = call("GET", "/tg/manage", headers=headers())
+        print_json(data)
+        return
+    if len(args) != 1 or args[0] not in {"on", "off"}:
+        print("usage: /manage-tg [on|off]")
+        return
+    enabled = args[0] == "on"
+    data = call("POST", "/tg/manage", headers=headers(), json={"enabled": enabled})
+    print_json(data)
 
 
 def cmd_logout(_: list[str]):
@@ -221,7 +223,7 @@ def help_text():
     print("  register <username> <password>")
     print("  login <username> <password>  # asks code from admin bot")
     print("  /add-tg [username password]  # link account via Telegram code")
-    print("  /manage-tg                   # manage Telegram link")
+    print("  /manage-tg [on|off]          # show/toggle Telegram link")
     print("  logout")
     print("  me")
     print("  send <recipient> <message>")

@@ -15,12 +15,19 @@ if __package__ in (None, ""):
     from backend.app.auth import create_access_token, decode_token, hash_password, verify_password
     from backend.app.config import settings
     from backend.app.database import Base, SessionLocal, engine
-    from backend.app.models import LoginCode, Message, NotificationEvent, User
+    from backend.app.models import (
+        LoginCode,
+        Message,
+        NotificationEvent,
+        TelegramLink,
+        TelegramLinkCode,
+        User,
+    )
 else:
     from .auth import create_access_token, decode_token, hash_password, verify_password
     from .config import settings
     from .database import Base, SessionLocal, engine
-    from .models import LoginCode, Message, NotificationEvent, User
+    from .models import LoginCode, Message, NotificationEvent, TelegramLink, TelegramLinkCode, User
 
 Base.metadata.create_all(bind=engine)
 
@@ -196,6 +203,103 @@ def me(current_user: User):
             "created_at": current_user.created_at,
         }
     )
+
+
+@app.post("/tg/add/request")
+@require_auth
+def tg_add_request(current_user: User):
+    db = SessionLocal()
+    try:
+        me_user = db.query(User).filter(User.id == current_user.id).first()
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        expires_at = datetime.now(tz=timezone.utc) + timedelta(
+            minutes=settings.tg_link_code_ttl_minutes
+        )
+        row = TelegramLinkCode(
+            user_id=me_user.id, username=me_user.username, code=code, expires_at=expires_at
+        )
+        db.add(row)
+        db.commit()
+        return jsonify(
+            {
+                "detail": "Telegram link code created",
+                "bot_username": settings.telegram_bot_username,
+            }
+        )
+    finally:
+        db.close()
+
+
+@app.post("/tg/add/confirm")
+@require_auth
+def tg_add_confirm(current_user: User):
+    payload = request.get_json(silent=True) or {}
+    code = (payload.get("code") or "").strip()
+    if len(code) != 6 or not code.isdigit():
+        return json_error(400, "Code must be 6 digits")
+
+    db = SessionLocal()
+    try:
+        me_user = db.query(User).filter(User.id == current_user.id).first()
+        now = datetime.now(tz=timezone.utc)
+        row = (
+            db.query(TelegramLinkCode)
+            .filter(
+                TelegramLinkCode.user_id == me_user.id,
+                TelegramLinkCode.code == code,
+                TelegramLinkCode.used_at.is_(None),
+                TelegramLinkCode.expires_at > now,
+            )
+            .order_by(TelegramLinkCode.id.desc())
+            .first()
+        )
+        if row is None:
+            return json_error(401, "Invalid or expired link code")
+
+        link = db.query(TelegramLink).filter(TelegramLink.user_id == me_user.id).first()
+        if link is None:
+            link = TelegramLink(user_id=me_user.id, is_enabled=True)
+            db.add(link)
+        else:
+            link.is_enabled = True
+        row.used_at = now
+        db.commit()
+        return jsonify({"detail": "Telegram account linked", "linked": True, "enabled": True})
+    finally:
+        db.close()
+
+
+@app.get("/tg/manage")
+@require_auth
+def tg_manage(current_user: User):
+    db = SessionLocal()
+    try:
+        link = db.query(TelegramLink).filter(TelegramLink.user_id == current_user.id).first()
+        if link is None:
+            return jsonify({"linked": False, "enabled": False})
+        return jsonify({"linked": True, "enabled": bool(link.is_enabled)})
+    finally:
+        db.close()
+
+
+@app.post("/tg/manage")
+@require_auth
+def tg_manage_update(current_user: User):
+    payload = request.get_json(silent=True) or {}
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        return json_error(400, "enabled must be boolean")
+
+    db = SessionLocal()
+    try:
+        link = db.query(TelegramLink).filter(TelegramLink.user_id == current_user.id).first()
+        if link is None:
+            return json_error(404, "Telegram is not linked for this account")
+        link.is_enabled = enabled
+        db.commit()
+        return jsonify({"linked": True, "enabled": bool(link.is_enabled)})
+    finally:
+        db.close()
 
 
 @app.post("/messages")
@@ -380,6 +484,44 @@ def integration_login_codes():
                 LoginCode.dispatched_at.is_(None),
             )
             .order_by(LoginCode.id.asc())
+            .limit(limit)
+            .all()
+        )
+        response = []
+        for row in rows:
+            response.append(
+                {
+                    "id": row.id,
+                    "username": row.username,
+                    "code": row.code,
+                    "expires_at": row.expires_at,
+                }
+            )
+            row.dispatched_at = now
+        db.commit()
+        return jsonify(response)
+    finally:
+        db.close()
+
+
+@app.get("/integrations/tg-link-codes")
+@require_server_key
+def integration_tg_link_codes():
+    after_id = max(int(request.args.get("after_id", 0)), 0)
+    limit = min(max(int(request.args.get("limit", 50)), 1), 200)
+    now = datetime.now(tz=timezone.utc)
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(TelegramLinkCode)
+            .filter(
+                TelegramLinkCode.id > after_id,
+                TelegramLinkCode.used_at.is_(None),
+                TelegramLinkCode.expires_at > now,
+                TelegramLinkCode.dispatched_at.is_(None),
+            )
+            .order_by(TelegramLinkCode.id.asc())
             .limit(limit)
             .all()
         )
