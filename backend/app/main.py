@@ -13,12 +13,12 @@ if __package__ in (None, ""):
     from backend.app.auth import create_access_token, decode_token, hash_password, verify_password
     from backend.app.config import settings
     from backend.app.database import Base, SessionLocal, engine
-    from backend.app.models import Message, User
+    from backend.app.models import Message, NotificationEvent, User
 else:
     from .auth import create_access_token, decode_token, hash_password, verify_password
     from .config import settings
     from .database import Base, SessionLocal, engine
-    from .models import Message, User
+    from .models import Message, NotificationEvent, User
 
 Base.metadata.create_all(bind=engine)
 
@@ -27,6 +27,17 @@ app = Flask(__name__)
 
 def json_error(status_code: int, detail: str):
     return jsonify({"detail": detail}), status_code
+
+
+def require_server_key(handler):
+    @wraps(handler)
+    def wrapper(*args, **kwargs):
+        api_key = request.headers.get("X-Server-Key", "")
+        if api_key != settings.integration_api_key:
+            return json_error(401, "Invalid server key")
+        return handler(*args, **kwargs)
+
+    return wrapper
 
 
 def require_auth(handler):
@@ -144,6 +155,14 @@ def send_message(current_user: User):
         db.add(message)
         db.commit()
         db.refresh(message)
+        event = NotificationEvent(
+            message_id=message.id,
+            sender_username=sender.username,
+            recipient_username=recipient.username,
+            content=message.content,
+        )
+        db.add(event)
+        db.commit()
         return (
             jsonify(
                 {
@@ -237,6 +256,38 @@ def inbox(current_user: User):
                     "created_at": message.created_at,
                 }
                 for message, sender_username in rows
+            ]
+        )
+    finally:
+        db.close()
+
+
+@app.get("/integrations/events")
+@require_server_key
+def integration_events():
+    after_id = max(int(request.args.get("after_id", 0)), 0)
+    limit = min(max(int(request.args.get("limit", 50)), 1), 200)
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(NotificationEvent)
+            .filter(NotificationEvent.id > after_id)
+            .order_by(NotificationEvent.id.asc())
+            .limit(limit)
+            .all()
+        )
+        return jsonify(
+            [
+                {
+                    "id": row.id,
+                    "message_id": row.message_id,
+                    "sender_username": row.sender_username,
+                    "recipient_username": row.recipient_username,
+                    "content": row.content,
+                    "created_at": row.created_at,
+                }
+                for row in rows
             ]
         )
     finally:

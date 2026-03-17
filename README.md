@@ -34,6 +34,32 @@ python client\terminal_client.py
 - `POST /messages`
 - `GET /messages/history/{other_username}`
 - `GET /messages/inbox?since_id=0`
+- `GET /integrations/events` (только с заголовком `X-Server-Key`)
+
+## Telegram-бот уведомлений (домен + ключ)
+
+Бот подключается к серверу по домену и ключу, читает события новых сообщений и отправляет их в Telegram.
+
+1) На backend задайте ключ интеграции:
+
+- env `INTEGRATION_API_KEY` (в Render уже добавлен в `render.yaml`)
+
+2) Запустите notifier-бота (локально/VPS):
+
+```powershell
+.venv\Scripts\Activate.ps1
+$env:BACKEND_DOMAIN="https://<your-service>.onrender.com"
+$env:SERVER_KEY="<INTEGRATION_API_KEY>"
+$env:TELEGRAM_BOT_TOKEN="<telegram_bot_token>"
+$env:TELEGRAM_CHAT_ID="<chat_id>"
+python client\telegram_notifier.py
+```
+
+3) Что делает бот:
+
+- запрашивает `GET /integrations/events?after_id=<id>`
+- передаёт `X-Server-Key: <SERVER_KEY>`
+- при новых сообщениях отправляет уведомление в Telegram
 
 ## Deploy на Render free
 

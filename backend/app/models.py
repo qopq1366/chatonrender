@@ -42,3 +42,16 @@ class Message(Base):
         "User", back_populates="received_messages", foreign_keys=[recipient_id]
     )
 
+
+class NotificationEvent(Base):
+    __tablename__ = "notification_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    message_id: Mapped[int] = mapped_column(ForeignKey("messages.id"), nullable=False)
+    sender_username: Mapped[str] = mapped_column(String(64), nullable=False)
+    recipient_username: Mapped[str] = mapped_column(String(64), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
