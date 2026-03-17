@@ -30,11 +30,15 @@ python client\terminal_client.py
 - `GET /health`
 - `POST /auth/register`
 - `POST /auth/login`
+- `GET /auth/bot-info`
+- `POST /auth/login/request-code`
+- `POST /auth/login/code`
 - `GET /auth/me`
 - `POST /messages`
 - `GET /messages/history/{other_username}`
 - `GET /messages/inbox?since_id=0`
 - `GET /integrations/events` (только с заголовком `X-Server-Key`)
+- `GET /integrations/login-codes` (только с заголовком `X-Server-Key`)
 
 ## Telegram-бот уведомлений (домен + ключ)
 
@@ -44,7 +48,11 @@ python client\terminal_client.py
 
 - env `INTEGRATION_API_KEY` (в Render уже добавлен в `render.yaml`)
 
-2) Запустите notifier-бота (локально/VPS):
+2) На backend задайте username бота админа:
+
+- env `TELEGRAM_BOT_USERNAME` (например `@my_admin_bot`)
+
+3) Запустите notifier-бота (локально/VPS):
 
 ```powershell
 .venv\Scripts\Activate.ps1
@@ -58,8 +66,23 @@ python client\telegram_notifier.py
 3) Что делает бот:
 
 - запрашивает `GET /integrations/events?after_id=<id>`
+- запрашивает `GET /integrations/login-codes?after_id=<id>`
 - передаёт `X-Server-Key: <SERVER_KEY>`
 - при новых сообщениях отправляет уведомление в Telegram
+- при запросе входа отправляет одноразовый код
+
+## Новый вход в terminal client
+
+Команда:
+
+```text
+login <username> <password>
+```
+
+Клиент:
+- сначала показывает `bot username`, который настроил админ;
+- затем запрашивает одноразовый код, который пришёл в Telegram;
+- после ввода кода выполняет вход и сохраняет JWT токен.
 
 ## Deploy на Render free
 

@@ -1,6 +1,8 @@
 from functools import wraps
 import os
+import secrets
 import sys
+from datetime import datetime, timedelta, timezone
 
 import jwt
 from flask import Flask, jsonify, request
@@ -13,12 +15,12 @@ if __package__ in (None, ""):
     from backend.app.auth import create_access_token, decode_token, hash_password, verify_password
     from backend.app.config import settings
     from backend.app.database import Base, SessionLocal, engine
-    from backend.app.models import Message, NotificationEvent, User
+    from backend.app.models import LoginCode, Message, NotificationEvent, User
 else:
     from .auth import create_access_token, decode_token, hash_password, verify_password
     from .config import settings
     from .database import Base, SessionLocal, engine
-    from .models import Message, NotificationEvent, User
+    from .models import LoginCode, Message, NotificationEvent, User
 
 Base.metadata.create_all(bind=engine)
 
@@ -112,6 +114,72 @@ def login():
         user = db.query(User).filter(User.username == username).first()
         if user is None or not verify_password(password, user.password_hash):
             return json_error(401, "Invalid credentials")
+        token = create_access_token(user.username)
+        return jsonify({"access_token": token, "token_type": "bearer"})
+    finally:
+        db.close()
+
+
+@app.get("/auth/bot-info")
+def bot_info():
+    return jsonify({"bot_username": settings.telegram_bot_username})
+
+
+@app.post("/auth/login/request-code")
+def login_request_code():
+    payload = request.get_json(silent=True) or {}
+    username = (payload.get("username") or "").strip()
+    password = payload.get("password") or ""
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.username == username).first()
+        if user is None or not verify_password(password, user.password_hash):
+            return json_error(401, "Invalid credentials")
+
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        expires_at = datetime.now(tz=timezone.utc) + timedelta(
+            minutes=settings.login_code_ttl_minutes
+        )
+        row = LoginCode(username=username, code=code, expires_at=expires_at)
+        db.add(row)
+        db.commit()
+        return jsonify({"detail": "Login code created"})
+    finally:
+        db.close()
+
+
+@app.post("/auth/login/code")
+def login_with_code():
+    payload = request.get_json(silent=True) or {}
+    username = (payload.get("username") or "").strip()
+    code = (payload.get("code") or "").strip()
+    if len(code) != 6 or not code.isdigit():
+        return json_error(400, "Code must be 6 digits")
+
+    db = SessionLocal()
+    try:
+        now = datetime.now(tz=timezone.utc)
+        row = (
+            db.query(LoginCode)
+            .filter(
+                LoginCode.username == username,
+                LoginCode.code == code,
+                LoginCode.used_at.is_(None),
+                LoginCode.expires_at > now,
+            )
+            .order_by(LoginCode.id.desc())
+            .first()
+        )
+        if row is None:
+            return json_error(401, "Invalid or expired code")
+
+        user = db.query(User).filter(User.username == username).first()
+        if user is None:
+            return json_error(401, "User not found")
+
+        row.used_at = now
+        db.commit()
         token = create_access_token(user.username)
         return jsonify({"access_token": token, "token_type": "bearer"})
     finally:
@@ -290,6 +358,44 @@ def integration_events():
                 for row in rows
             ]
         )
+    finally:
+        db.close()
+
+
+@app.get("/integrations/login-codes")
+@require_server_key
+def integration_login_codes():
+    after_id = max(int(request.args.get("after_id", 0)), 0)
+    limit = min(max(int(request.args.get("limit", 50)), 1), 200)
+    now = datetime.now(tz=timezone.utc)
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(LoginCode)
+            .filter(
+                LoginCode.id > after_id,
+                LoginCode.used_at.is_(None),
+                LoginCode.expires_at > now,
+                LoginCode.dispatched_at.is_(None),
+            )
+            .order_by(LoginCode.id.asc())
+            .limit(limit)
+            .all()
+        )
+        response = []
+        for row in rows:
+            response.append(
+                {
+                    "id": row.id,
+                    "username": row.username,
+                    "code": row.code,
+                    "expires_at": row.expires_at,
+                }
+            )
+            row.dispatched_at = now
+        db.commit()
+        return jsonify(response)
     finally:
         db.close()
 

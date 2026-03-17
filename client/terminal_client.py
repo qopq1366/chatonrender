@@ -62,7 +62,15 @@ def cmd_login(args: list[str]):
         print("usage: login <username> <password>")
         return
     username, password = args
-    data = call("POST", "/auth/login", json={"username": username, "password": password})
+    info = call("GET", "/auth/bot-info")
+    print(f"admin bot: {info['bot_username']}")
+    call(
+        "POST",
+        "/auth/login/request-code",
+        json={"username": username, "password": password},
+    )
+    code = input("enter code from bot: ").strip()
+    data = call("POST", "/auth/login/code", json={"username": username, "code": code})
     save_token(data["access_token"])
     print("login successful")
 
@@ -121,7 +129,7 @@ def help_text():
     print("  help")
     print("  server <base_url>")
     print("  register <username> <password>")
-    print("  login <username> <password>")
+    print("  login <username> <password>  # asks code from admin bot")
     print("  logout")
     print("  me")
     print("  send <recipient> <message>")

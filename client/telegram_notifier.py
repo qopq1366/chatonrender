@@ -36,6 +36,21 @@ def fetch_events(after_id: int):
     return response.json()
 
 
+def fetch_login_codes(after_id: int):
+    url = f"{BACKEND_DOMAIN}/integrations/login-codes"
+    response = requests.get(
+        url,
+        params={"after_id": after_id, "limit": 100},
+        headers={"X-Server-Key": SERVER_KEY},
+        timeout=20,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"backend login codes failed: {response.status_code} {response.text[:300]}"
+        )
+    return response.json()
+
+
 def validate_env():
     missing = [
         name
@@ -53,11 +68,12 @@ def validate_env():
 def main():
     validate_env()
     print(f"Telegram notifier started. backend={BACKEND_DOMAIN}")
-    last_id = 0
+    last_event_id = 0
+    last_code_id = 0
 
     while True:
         try:
-            events = fetch_events(last_id)
+            events = fetch_events(last_event_id)
             for event in events:
                 text = (
                     f"New message #{event['message_id']}\n"
@@ -66,7 +82,18 @@ def main():
                     f"text: {event['content']}"
                 )
                 send_telegram(text)
-                last_id = max(last_id, int(event["id"]))
+                last_event_id = max(last_event_id, int(event["id"]))
+
+            codes = fetch_login_codes(last_code_id)
+            for item in codes:
+                text = (
+                    "Login code request\n"
+                    f"user: {item['username']}\n"
+                    f"code: {item['code']}\n"
+                    "Введите код в terminal client."
+                )
+                send_telegram(text)
+                last_code_id = max(last_code_id, int(item["id"]))
         except Exception as exc:
             print(f"notifier error: {exc}")
 
