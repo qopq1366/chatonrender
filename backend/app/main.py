@@ -2,11 +2,14 @@ from functools import wraps
 import os
 import secrets
 import sys
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import jwt
+import requests
 from flask import Flask, jsonify, request
-from sqlalchemy import and_, desc, or_
+from sqlalchemy import and_, desc, or_, text
 
 if __package__ in (None, ""):
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -29,13 +32,173 @@ else:
     from .database import Base, SessionLocal, engine
     from .models import LoginCode, Message, NotificationEvent, TelegramLink, TelegramLinkCode, User
 
+def _column_exists(connection, table_name: str, column_name: str) -> bool:
+    rows = connection.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+    return any(str(row[1]) == column_name for row in rows)
+
+
+def migrate_schema():
+    with engine.begin() as connection:
+        try:
+            if not _column_exists(connection, "telegram_links", "telegram_user_id"):
+                connection.execute(text("ALTER TABLE telegram_links ADD COLUMN telegram_user_id INTEGER"))
+            if not _column_exists(connection, "telegram_links", "telegram_chat_id"):
+                connection.execute(text("ALTER TABLE telegram_links ADD COLUMN telegram_chat_id INTEGER"))
+        except Exception:
+            pass
+
+
 Base.metadata.create_all(bind=engine)
+migrate_schema()
 
 app = Flask(__name__)
+_TELEGRAM_BOT_THREAD_STARTED = False
 
 
 def json_error(status_code: int, detail: str):
     return jsonify({"detail": detail}), status_code
+
+
+def telegram_api(method: str, payload: dict):
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return None
+    url = f"https://api.telegram.org/bot{token}/{method}"
+    response = requests.post(url, json=payload, timeout=20)
+    if response.status_code >= 400:
+        return None
+    return response.json()
+
+
+def send_telegram_message(chat_id: int, text: str):
+    telegram_api("sendMessage", {"chat_id": chat_id, "text": text})
+
+
+def process_telegram_update(update: dict):
+    message = update.get("message") or {}
+    text = (message.get("text") or "").strip()
+    if not text.startswith("/"):
+        return
+    chat = message.get("chat") or {}
+    from_user = message.get("from") or {}
+    chat_id = chat.get("id")
+    telegram_user_id = from_user.get("id")
+    if not isinstance(chat_id, int) or not isinstance(telegram_user_id, int):
+        return
+
+    parts = text.split()
+    command = parts[0].lower()
+
+    db = SessionLocal()
+    try:
+        if command == "/start":
+            send_telegram_message(
+                chat_id,
+                "Бот активен. Для привязки используйте /link <code>.",
+            )
+            return
+
+        if command == "/link":
+            if len(parts) != 2:
+                send_telegram_message(chat_id, "Использование: /link <code>")
+                return
+            code = parts[1].strip()
+            now = datetime.now(tz=timezone.utc)
+            row = (
+                db.query(TelegramLinkCode)
+                .filter(
+                    TelegramLinkCode.code == code,
+                    TelegramLinkCode.used_at.is_(None),
+                    TelegramLinkCode.expires_at > now,
+                )
+                .order_by(TelegramLinkCode.id.desc())
+                .first()
+            )
+            if row is None:
+                send_telegram_message(chat_id, "Код не найден или истек.")
+                return
+
+            link = db.query(TelegramLink).filter(TelegramLink.user_id == row.user_id).first()
+            if link is None:
+                link = TelegramLink(
+                    user_id=row.user_id,
+                    telegram_user_id=telegram_user_id,
+                    telegram_chat_id=chat_id,
+                    is_enabled=True,
+                )
+                db.add(link)
+            else:
+                link.telegram_user_id = telegram_user_id
+                link.telegram_chat_id = chat_id
+                link.is_enabled = True
+            row.used_at = now
+            db.commit()
+            send_telegram_message(chat_id, "Аккаунт успешно привязан к мессенджеру.")
+            return
+
+        if command == "/manage":
+            link = (
+                db.query(TelegramLink)
+                .filter(TelegramLink.telegram_user_id == telegram_user_id)
+                .first()
+            )
+            if link is None:
+                send_telegram_message(chat_id, "Аккаунт не привязан. Сначала /link <code>.")
+                return
+            if len(parts) == 1:
+                state = "on" if link.is_enabled else "off"
+                send_telegram_message(chat_id, f"Текущий статус уведомлений: {state}")
+                return
+            if len(parts) == 2 and parts[1].lower() in {"on", "off"}:
+                link.is_enabled = parts[1].lower() == "on"
+                db.commit()
+                send_telegram_message(chat_id, "Статус обновлен.")
+                return
+            send_telegram_message(chat_id, "Использование: /manage [on|off]")
+    finally:
+        db.close()
+
+
+def telegram_bot_loop():
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return
+    offset = 0
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{token}/getUpdates"
+            response = requests.get(
+                url,
+                params={"timeout": 25, "offset": offset},
+                timeout=35,
+            )
+            if response.status_code >= 400:
+                time.sleep(2)
+                continue
+            data = response.json()
+            if not data.get("ok"):
+                time.sleep(2)
+                continue
+            for update in data.get("result", []):
+                update_id = int(update.get("update_id", 0))
+                offset = max(offset, update_id + 1)
+                process_telegram_update(update)
+        except Exception:
+            time.sleep(2)
+
+
+def start_telegram_bot_once():
+    global _TELEGRAM_BOT_THREAD_STARTED
+    if _TELEGRAM_BOT_THREAD_STARTED:
+        return
+    if not os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
+        return
+    thread = threading.Thread(target=telegram_bot_loop, daemon=True)
+    thread.start()
+    _TELEGRAM_BOT_THREAD_STARTED = True
+
+
+start_telegram_bot_once()
 
 
 def require_server_key(handler):
@@ -224,6 +387,8 @@ def tg_add_request(current_user: User):
             {
                 "detail": "Telegram link code created",
                 "bot_username": settings.telegram_bot_username,
+                "link_code": code,
+                "expires_in_minutes": settings.tg_link_code_ttl_minutes,
             }
         )
     finally:
@@ -247,7 +412,6 @@ def tg_add_confirm(current_user: User):
             .filter(
                 TelegramLinkCode.user_id == me_user.id,
                 TelegramLinkCode.code == code,
-                TelegramLinkCode.used_at.is_(None),
                 TelegramLinkCode.expires_at > now,
             )
             .order_by(TelegramLinkCode.id.desc())
@@ -255,16 +419,20 @@ def tg_add_confirm(current_user: User):
         )
         if row is None:
             return json_error(401, "Invalid or expired link code")
+        if row.used_at is None:
+            return json_error(409, "Code is not confirmed in Telegram bot yet")
 
         link = db.query(TelegramLink).filter(TelegramLink.user_id == me_user.id).first()
-        if link is None:
-            link = TelegramLink(user_id=me_user.id, is_enabled=True)
-            db.add(link)
-        else:
-            link.is_enabled = True
-        row.used_at = now
-        db.commit()
-        return jsonify({"detail": "Telegram account linked", "linked": True, "enabled": True})
+        if link is None or not link.telegram_user_id:
+            return json_error(409, "Telegram account is not linked yet")
+        return jsonify(
+            {
+                "detail": "Telegram account linked",
+                "linked": True,
+                "enabled": bool(link.is_enabled),
+                "telegram_user_id": link.telegram_user_id,
+            }
+        )
     finally:
         db.close()
 
@@ -276,8 +444,14 @@ def tg_manage(current_user: User):
     try:
         link = db.query(TelegramLink).filter(TelegramLink.user_id == current_user.id).first()
         if link is None:
-            return jsonify({"linked": False, "enabled": False})
-        return jsonify({"linked": True, "enabled": bool(link.is_enabled)})
+            return jsonify({"linked": False, "enabled": False, "telegram_user_id": None})
+        return jsonify(
+            {
+                "linked": bool(link.telegram_user_id),
+                "enabled": bool(link.is_enabled),
+                "telegram_user_id": link.telegram_user_id,
+            }
+        )
     finally:
         db.close()
 
@@ -297,7 +471,13 @@ def tg_manage_update(current_user: User):
             return json_error(404, "Telegram is not linked for this account")
         link.is_enabled = enabled
         db.commit()
-        return jsonify({"linked": True, "enabled": bool(link.is_enabled)})
+        return jsonify(
+            {
+                "linked": bool(link.telegram_user_id),
+                "enabled": bool(link.is_enabled),
+                "telegram_user_id": link.telegram_user_id,
+            }
+        )
     finally:
         db.close()
 
@@ -335,6 +515,16 @@ def send_message(current_user: User):
         )
         db.add(event)
         db.commit()
+        tg_link = db.query(TelegramLink).filter(TelegramLink.user_id == recipient.id).first()
+        if tg_link and tg_link.is_enabled and tg_link.telegram_chat_id:
+            send_telegram_message(
+                int(tg_link.telegram_chat_id),
+                (
+                    f"Новое сообщение от {sender.username}\n"
+                    f"Текст: {message.content}\n"
+                    f"ID: {message.id}"
+                ),
+            )
         return (
             jsonify(
                 {

@@ -31,14 +31,13 @@ python client\terminal_client.py
 - `POST /auth/register`
 - `POST /auth/login`
 - `GET /auth/bot-info`
-- `POST /auth/login/request-code`
-- `POST /auth/login/code`
 - `GET /auth/me`
+- `POST /tg/add/request`
+- `GET /tg/manage`
+- `POST /tg/manage`
 - `POST /messages`
 - `GET /messages/history/{other_username}`
 - `GET /messages/inbox?since_id=0`
-- `GET /integrations/events` (только с заголовком `X-Server-Key`)
-- `GET /integrations/login-codes` (только с заголовком `X-Server-Key`)
 
 ## Telegram привязка аккаунта (`/add-tg` и `/manage-tg`)
 
@@ -47,9 +46,10 @@ python client\terminal_client.py
 1. Пользователь в terminal client регистрируется/логинится.
 2. В клиенте вводит команду `/add-tg`.
 3. Клиент показывает `username` Telegram-бота (который задал админ).
-4. В Telegram-боте пользователь получает код привязки.
-5. В клиенте вводит этот код.
-6. Если код валиден, и в клиенте, и в боте приходит подтверждение: аккаунт привязан.
+4. Клиент показывает код привязки (5 минут).
+5. Пользователь отправляет боту команду `/link <code>`.
+6. Сервер связывает `telegram_user_id` и `user_id` мессенджера в БД.
+7. Командой `/manage-tg` можно смотреть/включать/выключать Telegram-уведомления.
 
 Ограничение кода:
 
@@ -60,9 +60,11 @@ python client\terminal_client.py
 - В клиенте доступна команда `/manage-tg` (управление Telegram-привязкой).
 - В Telegram приходят уведомления о новых сообщениях с сервера.
 
-### Единый процесс для Telegram и сервера чата
+### Как это работает на сервере
 
-По вашей схеме, Telegram-бот и сервер чата могут работать как один процесс (один запускаемый `.py`), чтобы синхронизация была прямой и без отдельного внешнего сервиса.
+- Telegram-бот запускается внутри backend процесса (один серверный процесс).
+- Бот обрабатывает `/start`, `/link <code>`, `/manage [on|off]`.
+- При новом сообщении сервер сразу отправляет Telegram-уведомление получателю, если привязка включена.
 
 Если сервер на `*.onrender.com`, terminal client:
 - показывает статус пробуждения Render;
@@ -91,9 +93,9 @@ cd chatonrender
 4. Проверьте env в Render:
    - `JWT_SECRET`
    - `ACCESS_TOKEN_EXPIRE_MINUTES`
-   - `INTEGRATION_API_KEY`
    - `TELEGRAM_BOT_USERNAME`
-   - `LOGIN_CODE_TTL_MINUTES`
+   - `TELEGRAM_BOT_TOKEN`
+   - `TG_LINK_CODE_TTL_MINUTES`
 
 Проверка:
 

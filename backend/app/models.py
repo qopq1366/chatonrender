@@ -77,6 +77,8 @@ class TelegramLink(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, nullable=False)
+    telegram_user_id: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
+    telegram_chat_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
     linked_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

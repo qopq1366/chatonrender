@@ -10,8 +10,6 @@ TOKEN_PATH = Path.home() / ".chatonrender_token"
 RENDER_AWAKE_CHECKED = False
 KEEPALIVE_STARTED = False
 STOP_EVENT = threading.Event()
-LAST_USERNAME: str | None = None
-LAST_PASSWORD: str | None = None
 
 
 def load_token() -> str | None:
@@ -99,33 +97,12 @@ def print_json(data):
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
-def login_with_bot_code(username: str, password: str):
-    global LAST_USERNAME, LAST_PASSWORD
-    info = call("GET", "/auth/bot-info")
-    print(f"telegram bot: {info['bot_username']}")
-    print("Получите код в Telegram и введите его (код действует 5 минут).")
-    call(
-        "POST",
-        "/auth/login/request-code",
-        json={"username": username, "password": password},
-    )
-    code = input("enter code from bot: ").strip()
-    data = call("POST", "/auth/login/code", json={"username": username, "code": code})
-    save_token(data["access_token"])
-    LAST_USERNAME = username
-    LAST_PASSWORD = password
-    print("login successful")
-
-
 def cmd_register(args: list[str]):
-    global LAST_USERNAME, LAST_PASSWORD
     if len(args) != 2:
         print("usage: register <username> <password>")
         return
     username, password = args
     data = call("POST", "/auth/register", json={"username": username, "password": password})
-    LAST_USERNAME = username
-    LAST_PASSWORD = password
     print("registered:")
     print_json(data)
 
@@ -135,7 +112,9 @@ def cmd_login(args: list[str]):
         print("usage: login <username> <password>")
         return
     username, password = args
-    login_with_bot_code(username, password)
+    data = call("POST", "/auth/login", json={"username": username, "password": password})
+    save_token(data["access_token"])
+    print("login successful")
 
 
 def cmd_add_tg(args: list[str]):
@@ -144,10 +123,10 @@ def cmd_add_tg(args: list[str]):
         return
     result = call("POST", "/tg/add/request", headers=headers())
     print(f"telegram bot: {result['bot_username']}")
-    print("Введите код из бота (действует 5 минут).")
-    code = input("tg link code: ").strip()
-    call("POST", "/tg/add/confirm", headers=headers(), json={"code": code})
-    print("telegram account linked")
+    print(f"link code: {result['link_code']}")
+    print("Откройте Telegram бота и отправьте команду:")
+    print(f"/link {result['link_code']}")
+    print("После этого проверьте статус командой /manage-tg")
 
 
 def cmd_manage_tg(args: list[str]):
@@ -221,8 +200,8 @@ def help_text():
     print("  help")
     print("  server <base_url>")
     print("  register <username> <password>")
-    print("  login <username> <password>  # asks code from admin bot")
-    print("  /add-tg [username password]  # link account via Telegram code")
+    print("  login <username> <password>")
+    print("  /add-tg                      # get code and send it to bot")
     print("  /manage-tg [on|off]          # show/toggle Telegram link")
     print("  logout")
     print("  me")
