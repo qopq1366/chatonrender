@@ -40,54 +40,34 @@ python client\terminal_client.py
 - `GET /integrations/events` (только с заголовком `X-Server-Key`)
 - `GET /integrations/login-codes` (только с заголовком `X-Server-Key`)
 
-## Telegram-бот уведомлений (домен + ключ)
+## Telegram привязка аккаунта (`/add-tg` и `/manage-tg`)
 
-Бот подключается к серверу по домену и ключу, читает события новых сообщений и отправляет их в Telegram.
+Целевой UX:
 
-1) На backend задайте ключ интеграции:
+1. Пользователь в terminal client регистрируется/логинится.
+2. В клиенте вводит команду `/add-tg`.
+3. Клиент показывает `username` Telegram-бота (который задал админ).
+4. В Telegram-боте пользователь получает код привязки.
+5. В клиенте вводит этот код.
+6. Если код валиден, и в клиенте, и в боте приходит подтверждение: аккаунт привязан.
 
-- env `INTEGRATION_API_KEY` (в Render уже добавлен в `render.yaml`)
+Ограничение кода:
 
-2) На backend задайте username бота админа:
+- Код привязки действует **5 минут**, потом становится недействительным.
 
-- env `TELEGRAM_BOT_USERNAME` (например `@my_admin_bot`)
+После привязки:
 
-3) Запустите notifier-бота (локально/VPS):
+- В клиенте доступна команда `/manage-tg` (управление Telegram-привязкой).
+- В Telegram приходят уведомления о новых сообщениях с сервера.
 
-```powershell
-.venv\Scripts\Activate.ps1
-$env:BACKEND_DOMAIN="https://<your-service>.onrender.com"
-$env:SERVER_KEY="<INTEGRATION_API_KEY>"
-$env:TELEGRAM_BOT_TOKEN="<telegram_bot_token>"
-$env:TELEGRAM_CHAT_ID="<chat_id>"
-python client\telegram_notifier.py
-```
+### Единый процесс для Telegram и сервера чата
 
-3) Что делает бот:
-
-- запрашивает `GET /integrations/events?after_id=<id>`
-- запрашивает `GET /integrations/login-codes?after_id=<id>`
-- передаёт `X-Server-Key: <SERVER_KEY>`
-- при новых сообщениях отправляет уведомление в Telegram
-- при запросе входа отправляет одноразовый код
-
-## Новый вход в terminal client
-
-Команда:
-
-```text
-login <username> <password>
-```
-
-Клиент:
-- сначала показывает `bot username`, который настроил админ;
-- затем запрашивает одноразовый код, который пришёл в Telegram;
-- после ввода кода выполняет вход и сохраняет JWT токен.
+По вашей схеме, Telegram-бот и сервер чата могут работать как один процесс (один запускаемый `.py`), чтобы синхронизация была прямой и без отдельного внешнего сервиса.
 
 Если сервер на `*.onrender.com`, terminal client:
-- покажет `Render просыпается...` при первом подключении;
-- дождётся `health=ok`;
-- затем будет слать keep-alive запросы `/health` в фоне.
+- показывает статус пробуждения Render;
+- ждёт готовности `/health`;
+- отправляет keep-alive ping в фоне.
 
 ## Fork + Deploy (Render + custom domain)
 
