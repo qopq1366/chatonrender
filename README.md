@@ -84,52 +84,68 @@ login <username> <password>
 - затем запрашивает одноразовый код, который пришёл в Telegram;
 - после ввода кода выполняет вход и сохраняет JWT токен.
 
-## Deploy на Render free
+Если сервер на `*.onrender.com`, terminal client:
+- покажет `Render просыпается...` при первом подключении;
+- дождётся `health=ok`;
+- затем будет слать keep-alive запросы `/health` в фоне.
 
-### 1) Залить проект в GitHub
+## Fork + Deploy (Render + custom domain)
+
+### 1) Fork репозитория
+
+1. Нажмите `Fork` на GitHub.
+2. Склонируйте ваш fork:
 
 ```powershell
-git init
-git add .
-git commit -m "init chatonrender"
-git branch -M main
-git remote add origin https://github.com/<your-user>/<your-repo>.git
-git push -u origin main
+git clone https://github.com/<your-user>/chatonrender.git
+cd chatonrender
 ```
 
-### 2) Deploy на Render (через Blueprint)
+3. Работайте в своей ветке и пушьте в свой fork.
 
-1. В Render нажмите `New +` -> `Blueprint`.
-2. Подключите GitHub-репозиторий.
-3. Render подхватит `render.yaml` автоматически.
-4. Нажмите `Apply`.
+### 2) Развернуть сервер на Render
 
-`render.yaml` уже содержит:
-- `buildCommand`: `pip install -r requirements.txt`
-- `startCommand`: `gunicorn backend.app.main:app --bind 0.0.0.0:$PORT`
-- env-переменные: `JWT_SECRET`, `ACCESS_TOKEN_EXPIRE_MINUTES`
+1. Render -> `New +` -> `Blueprint`.
+2. Подключите ваш fork.
+3. Render автоматически применит `render.yaml`.
+4. Проверьте env в Render:
+   - `JWT_SECRET`
+   - `ACCESS_TOKEN_EXPIRE_MINUTES`
+   - `INTEGRATION_API_KEY`
+   - `TELEGRAM_BOT_USERNAME`
+   - `LOGIN_CODE_TTL_MINUTES`
 
-### 3) Проверка после деплоя
+Проверка:
 
-- Откройте `https://<your-service>.onrender.com/health`
-- Должно вернуть: `{"status":"ok"}`
+- `https://<service>.onrender.com/health` -> `{"status":"ok"}`
 
-Важно: SQLite на free web service может быть непостоянной между рестартами инстанса. Для production лучше внешняя БД (например, Postgres).
+### 3) Подключить custom domain
 
-## Обычный deploy (не Render)
+В Render (service -> `Settings` -> `Custom Domains`):
 
-На любом Linux/VPS:
+1. Добавьте домен, например `api.example.com`.
+2. Настройте DNS запись у регистратора (обычно `CNAME` на Render target).
+3. Дождитесь выпуска SSL сертификата в Render.
+4. Проверьте: `https://api.example.com/health`
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-export JWT_SECRET="change-me"
-gunicorn backend.app.main:app --bind 0.0.0.0:8000
-```
+### 4) Настроить terminal client под ваш домен
 
-Для Python-клиента задайте сервер командой:
+Запустите клиент и укажите ваш домен backend:
 
 ```text
-server https://<your-domain>
+server https://api.example.com
 ```
+
+Дальше стандартно:
+
+```text
+register <username> <password>
+login <username> <password>
+```
+
+Важно: на free тарифе Render может засыпать. Клиент уже умеет:
+- показывать статус пробуждения Render;
+- ждать готовности `/health`;
+- отправлять keep-alive ping в фоне.
+
+Важно: SQLite на free web service может быть непостоянной между рестартами. Для production лучше Postgres.

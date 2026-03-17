@@ -1,10 +1,15 @@
 import json
+import threading
+import time
 from pathlib import Path
 
 import requests
 
 BASE_URL = "http://127.0.0.1:8000"
 TOKEN_PATH = Path.home() / ".chatonrender_token"
+RENDER_AWAKE_CHECKED = False
+KEEPALIVE_STARTED = False
+STOP_EVENT = threading.Event()
 
 
 def load_token() -> str | None:
@@ -29,7 +34,52 @@ def headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def is_render_server() -> bool:
+    return "onrender.com" in BASE_URL.lower()
+
+
+def warmup_render_if_needed() -> None:
+    global RENDER_AWAKE_CHECKED
+    if not is_render_server() or RENDER_AWAKE_CHECKED:
+        return
+
+    print("Render просыпается, подождите...")
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        try:
+            response = requests.get(f"{BASE_URL}/health", timeout=15)
+            if response.status_code == 200:
+                print("Render уже проснулся.")
+                RENDER_AWAKE_CHECKED = True
+                return
+        except requests.RequestException:
+            pass
+        time.sleep(3)
+
+    raise RuntimeError("Render долго не отвечает. Попробуйте снова через минуту.")
+
+
+def keepalive_loop():
+    while not STOP_EVENT.is_set():
+        if is_render_server():
+            try:
+                requests.get(f"{BASE_URL}/health", timeout=15)
+            except requests.RequestException:
+                pass
+        STOP_EVENT.wait(45)
+
+
+def start_keepalive_once():
+    global KEEPALIVE_STARTED
+    if KEEPALIVE_STARTED:
+        return
+    thread = threading.Thread(target=keepalive_loop, daemon=True)
+    thread.start()
+    KEEPALIVE_STARTED = True
+
+
 def call(method: str, path: str, **kwargs):
+    warmup_render_if_needed()
     url = f"{BASE_URL}{path}"
     response = requests.request(method, url, timeout=20, **kwargs)
     if response.status_code >= 400:
@@ -116,11 +166,12 @@ def cmd_inbox(args: list[str]):
 
 
 def cmd_set_server(args: list[str]):
-    global BASE_URL
+    global BASE_URL, RENDER_AWAKE_CHECKED
     if len(args) != 1:
         print("usage: server <base_url>")
         return
     BASE_URL = args[0].rstrip("/")
+    RENDER_AWAKE_CHECKED = False
     print(f"server set to {BASE_URL}")
 
 
@@ -152,12 +203,14 @@ COMMANDS = {
 
 
 def main():
+    start_keepalive_once()
     print("ChatOnRender terminal client. Type 'help' for commands.")
     while True:
         raw = input("> ").strip()
         if not raw:
             continue
         if raw in {"exit", "quit"}:
+            STOP_EVENT.set()
             print("bye")
             return
 
