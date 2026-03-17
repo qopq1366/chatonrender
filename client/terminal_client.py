@@ -10,6 +10,8 @@ TOKEN_PATH = Path.home() / ".chatonrender_token"
 RENDER_AWAKE_CHECKED = False
 KEEPALIVE_STARTED = False
 STOP_EVENT = threading.Event()
+LAST_USERNAME: str | None = None
+LAST_PASSWORD: str | None = None
 
 
 def load_token() -> str | None:
@@ -97,12 +99,33 @@ def print_json(data):
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
+def login_with_bot_code(username: str, password: str):
+    global LAST_USERNAME, LAST_PASSWORD
+    info = call("GET", "/auth/bot-info")
+    print(f"telegram bot: {info['bot_username']}")
+    print("Получите код в Telegram и введите его (код действует 5 минут).")
+    call(
+        "POST",
+        "/auth/login/request-code",
+        json={"username": username, "password": password},
+    )
+    code = input("enter code from bot: ").strip()
+    data = call("POST", "/auth/login/code", json={"username": username, "code": code})
+    save_token(data["access_token"])
+    LAST_USERNAME = username
+    LAST_PASSWORD = password
+    print("login successful")
+
+
 def cmd_register(args: list[str]):
+    global LAST_USERNAME, LAST_PASSWORD
     if len(args) != 2:
         print("usage: register <username> <password>")
         return
     username, password = args
     data = call("POST", "/auth/register", json={"username": username, "password": password})
+    LAST_USERNAME = username
+    LAST_PASSWORD = password
     print("registered:")
     print_json(data)
 
@@ -112,17 +135,33 @@ def cmd_login(args: list[str]):
         print("usage: login <username> <password>")
         return
     username, password = args
-    info = call("GET", "/auth/bot-info")
-    print(f"admin bot: {info['bot_username']}")
-    call(
-        "POST",
-        "/auth/login/request-code",
-        json={"username": username, "password": password},
-    )
-    code = input("enter code from bot: ").strip()
-    data = call("POST", "/auth/login/code", json={"username": username, "code": code})
-    save_token(data["access_token"])
-    print("login successful")
+    login_with_bot_code(username, password)
+
+
+def cmd_add_tg(args: list[str]):
+    if len(args) == 2:
+        username, password = args
+    elif len(args) == 0 and LAST_USERNAME and LAST_PASSWORD:
+        username, password = LAST_USERNAME, LAST_PASSWORD
+    elif len(args) == 0:
+        username = input("username: ").strip()
+        password = input("password: ").strip()
+    else:
+        print("usage: /add-tg [username password]")
+        return
+
+    login_with_bot_code(username, password)
+    print("telegram account linked")
+
+
+def cmd_manage_tg(_: list[str]):
+    if not load_token():
+        print("Сначала выполните /add-tg или login.")
+        return
+    print("Telegram linked.")
+    print("Доступные действия (через клиент):")
+    print("- /manage-tg  (показать статус)")
+    print("- logout      (выйти из аккаунта)")
 
 
 def cmd_logout(_: list[str]):
@@ -181,6 +220,8 @@ def help_text():
     print("  server <base_url>")
     print("  register <username> <password>")
     print("  login <username> <password>  # asks code from admin bot")
+    print("  /add-tg [username password]  # link account via Telegram code")
+    print("  /manage-tg                   # manage Telegram link")
     print("  logout")
     print("  me")
     print("  send <recipient> <message>")
@@ -195,6 +236,8 @@ COMMANDS = {
     "register": cmd_register,
     "login": cmd_login,
     "logout": cmd_logout,
+    "add-tg": cmd_add_tg,
+    "manage-tg": cmd_manage_tg,
     "me": cmd_me,
     "send": cmd_send,
     "history": cmd_history,
@@ -216,6 +259,8 @@ def main():
 
         parts = raw.split()
         command, args = parts[0], parts[1:]
+        if command.startswith("/"):
+            command = command[1:]
         handler = COMMANDS.get(command)
         if handler is None:
             print("unknown command")
