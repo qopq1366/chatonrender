@@ -31,6 +31,7 @@ python client\terminal_client.py
 - `POST /auth/register`
 - `POST /auth/login`
 - `GET /auth/bot-info`
+- `GET /client/version-policy`
 - `GET /auth/me`
 - `POST /tg/add/request`
 - `GET /tg/manage`
@@ -70,6 +71,21 @@ python client\terminal_client.py
 - показывает статус пробуждения Render;
 - ждёт готовности `/health`;
 - отправляет keep-alive ping в фоне.
+- показывает политику версий клиента (`min_supported`/`latest`) через `/client/version-policy`.
+
+## Удобный режим диалога в терминале
+
+Вместо сырых JSON можно использовать:
+
+```text
+chat <username>
+```
+
+Что получаете:
+- компактный вывод последних сообщений;
+- удобный ввод в формате чата (`[username]>`);
+- подгрузка новых входящих без вывода всей истории на экран;
+- команды внутри диалога: `/refresh`, `/exit`.
 
 ## Fork + Deploy (Render + custom domain)
 
