@@ -14,6 +14,9 @@ class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     login_code_ttl_minutes: int = int(os.getenv("LOGIN_CODE_TTL_MINUTES", "5"))
     tg_link_code_ttl_minutes: int = int(os.getenv("TG_LINK_CODE_TTL_MINUTES", "5"))
+    client_min_supported: str = os.getenv("CLIENT_MIN_SUPPORTED", "1.0.0")
+    client_latest: str = os.getenv("CLIENT_LATEST", "1.1.0")
+    client_download_url: str = os.getenv("CLIENT_DOWNLOAD_URL", "")
 
 
 settings = Settings()

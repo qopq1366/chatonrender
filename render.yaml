@@ -20,4 +20,10 @@ services:
         value: 5
       - key: TG_LINK_CODE_TTL_MINUTES
         value: 5
+      - key: CLIENT_MIN_SUPPORTED
+        value: "1.0.0"
+      - key: CLIENT_LATEST
+        value: "1.1.0"
+      - key: CLIENT_DOWNLOAD_URL
+        value: ""
 

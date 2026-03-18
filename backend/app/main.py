@@ -59,6 +59,21 @@ def json_error(status_code: int, detail: str):
     return jsonify({"detail": detail}), status_code
 
 
+def parse_version(version: str) -> tuple[int, int, int]:
+    parts = (version or "0.0.0").strip().split(".")
+    while len(parts) < 3:
+        parts.append("0")
+    parsed: list[int] = []
+    for part in parts[:3]:
+        digits = "".join(ch for ch in part if ch.isdigit())
+        parsed.append(int(digits) if digits else 0)
+    return parsed[0], parsed[1], parsed[2]
+
+
+def is_version_supported(client_version: str) -> bool:
+    return parse_version(client_version) >= parse_version(settings.client_min_supported)
+
+
 def telegram_api(method: str, payload: dict):
     token = settings.telegram_bot_token.strip()
     if not token:
@@ -241,6 +256,26 @@ def require_auth(handler):
 @app.get("/health")
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.get("/client/version-policy")
+def client_version_policy():
+    client_version = (request.args.get("client_version") or "").strip()
+    supported = is_version_supported(client_version) if client_version else True
+    update_available = (
+        parse_version(settings.client_latest) > parse_version(client_version)
+        if client_version
+        else False
+    )
+    return jsonify(
+        {
+            "min_supported": settings.client_min_supported,
+            "latest": settings.client_latest,
+            "download_url": settings.client_download_url,
+            "supported": supported,
+            "update_available": update_available,
+        }
+    )
 
 
 @app.post("/auth/register")

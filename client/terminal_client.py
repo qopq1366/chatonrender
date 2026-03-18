@@ -1,4 +1,3 @@
-import json
 import threading
 import time
 from pathlib import Path
@@ -6,6 +5,7 @@ from pathlib import Path
 import requests
 
 BASE_URL = "http://127.0.0.1:8000"
+CLIENT_VERSION = "1.1.0"
 TOKEN_PATH = Path.home() / ".chatonrender_token"
 RENDER_AWAKE_CHECKED = False
 KEEPALIVE_STARTED = False
@@ -78,6 +78,37 @@ def start_keepalive_once():
     KEEPALIVE_STARTED = True
 
 
+def check_version_policy():
+    try:
+        warmup_render_if_needed()
+        response = requests.get(
+            f"{BASE_URL}/client/version-policy",
+            params={"client_version": CLIENT_VERSION},
+            timeout=15,
+        )
+    except requests.RequestException:
+        return
+
+    if response.status_code == 404:
+        return
+    if response.status_code >= 400:
+        return
+
+    data = response.json()
+    if data.get("supported") is False:
+        print(
+            f"ВНИМАНИЕ: клиент {CLIENT_VERSION} больше не поддерживается. "
+            f"Минимальная версия: {data.get('min_supported')}."
+        )
+    elif data.get("update_available"):
+        print(
+            f"Есть обновление клиента: {data.get('latest')} (текущая: {CLIENT_VERSION})."
+        )
+        download_url = data.get("download_url")
+        if download_url:
+            print(f"Ссылка на обновление: {download_url}")
+
+
 def call(method: str, path: str, **kwargs):
     warmup_render_if_needed()
     url = f"{BASE_URL}{path}"
@@ -93,8 +124,21 @@ def call(method: str, path: str, **kwargs):
     return None
 
 
-def print_json(data):
-    print(json.dumps(data, ensure_ascii=False, indent=2))
+def format_time(value: str | None) -> str:
+    if not value:
+        return "--:--"
+    text = value.replace("T", " ")
+    if "." in text:
+        text = text.split(".", maxsplit=1)[0]
+    return text[-8:] if len(text) >= 8 else text
+
+
+def print_message_line(item: dict):
+    print(
+        f"[{format_time(item.get('created_at'))}] "
+        f"{item.get('sender_username')} -> {item.get('recipient_username')}: "
+        f"{item.get('content')}"
+    )
 
 
 def cmd_register(args: list[str]):
@@ -103,8 +147,7 @@ def cmd_register(args: list[str]):
         return
     username, password = args
     data = call("POST", "/auth/register", json={"username": username, "password": password})
-    print("registered:")
-    print_json(data)
+    print(f"registered: {data['username']} (id={data['id']})")
 
 
 def cmd_login(args: list[str]):
@@ -135,14 +178,20 @@ def cmd_manage_tg(args: list[str]):
         return
     if len(args) == 0:
         data = call("GET", "/tg/manage", headers=headers())
-        print_json(data)
+        print(
+            f"linked={data.get('linked')} enabled={data.get('enabled')} "
+            f"telegram_user_id={data.get('telegram_user_id')}"
+        )
         return
     if len(args) != 1 or args[0] not in {"on", "off"}:
         print("usage: /manage-tg [on|off]")
         return
     enabled = args[0] == "on"
     data = call("POST", "/tg/manage", headers=headers(), json={"enabled": enabled})
-    print_json(data)
+    print(
+        f"updated: linked={data.get('linked')} enabled={data.get('enabled')} "
+        f"telegram_user_id={data.get('telegram_user_id')}"
+    )
 
 
 def cmd_logout(_: list[str]):
@@ -152,7 +201,7 @@ def cmd_logout(_: list[str]):
 
 def cmd_me(_: list[str]):
     data = call("GET", "/auth/me", headers=headers())
-    print_json(data)
+    print(f"user: {data['username']} (id={data['id']})")
 
 
 def cmd_send(args: list[str]):
@@ -167,7 +216,7 @@ def cmd_send(args: list[str]):
         headers=headers(),
         json={"recipient_username": recipient, "content": content},
     )
-    print_json(data)
+    print_message_line(data)
 
 
 def cmd_history(args: list[str]):
@@ -175,14 +224,86 @@ def cmd_history(args: list[str]):
         print("usage: history <username>")
         return
     other = args[0]
-    data = call("GET", f"/messages/history/{other}", headers=headers())
-    print_json(data)
+    data = call("GET", f"/messages/history/{other}?limit=20", headers=headers())
+    rows = list(reversed(data))
+    if not rows:
+        print("История пуста.")
+        return
+    for item in rows:
+        print_message_line(item)
 
 
 def cmd_inbox(args: list[str]):
     since_id = int(args[0]) if args else 0
     data = call("GET", f"/messages/inbox?since_id={since_id}", headers=headers())
-    print_json(data)
+    if not data:
+        print("Новых сообщений нет.")
+        return
+    for item in data:
+        print_message_line(item)
+
+
+def get_max_inbox_id() -> int:
+    rows = call("GET", "/messages/inbox?since_id=0&limit=200", headers=headers())
+    return max((int(item["id"]) for item in rows), default=0)
+
+
+def print_chat_window(other_username: str, limit: int = 12):
+    rows = call(
+        "GET",
+        f"/messages/history/{other_username}?limit={limit}&offset=0",
+        headers=headers(),
+    )
+    rows = list(reversed(rows))
+    print(f"--- Диалог с {other_username} (последние {len(rows)}) ---")
+    for item in rows:
+        print_message_line(item)
+    print("Введите текст. Команды: /exit, /refresh")
+
+
+def poll_chat_incoming(other_username: str, since_id: int) -> int:
+    rows = call("GET", f"/messages/inbox?since_id={since_id}", headers=headers())
+    max_id = since_id
+    for item in rows:
+        msg_id = int(item["id"])
+        if msg_id > max_id:
+            max_id = msg_id
+        if item.get("sender_username") == other_username:
+            print_message_line(item)
+    return max_id
+
+
+def cmd_chat(args: list[str]):
+    if len(args) != 1:
+        print("usage: chat <username>")
+        return
+    other_username = args[0]
+    if not load_token():
+        print("Сначала выполните login.")
+        return
+
+    last_inbox_id = get_max_inbox_id()
+    print_chat_window(other_username)
+
+    while True:
+        last_inbox_id = poll_chat_incoming(other_username, last_inbox_id)
+        text = input(f"[{other_username}]> ").strip()
+        if not text:
+            continue
+        if text == "/exit":
+            print("Выход из диалога.")
+            return
+        if text == "/refresh":
+            print_chat_window(other_username)
+            continue
+
+        sent = call(
+            "POST",
+            "/messages",
+            headers=headers(),
+            json={"recipient_username": other_username, "content": text},
+        )
+        print_message_line(sent)
 
 
 def cmd_set_server(args: list[str]):
@@ -193,6 +314,7 @@ def cmd_set_server(args: list[str]):
     BASE_URL = args[0].rstrip("/")
     RENDER_AWAKE_CHECKED = False
     print(f"server set to {BASE_URL}")
+    check_version_policy()
 
 
 def help_text():
@@ -201,13 +323,14 @@ def help_text():
     print("  server <base_url>")
     print("  register <username> <password>")
     print("  login <username> <password>")
-    print("  /add-tg                      # get code and send it to bot")
-    print("  /manage-tg [on|off]          # show/toggle Telegram link")
-    print("  logout")
-    print("  me")
+    print("  chat <username>               # удобный режим диалога")
     print("  send <recipient> <message>")
     print("  history <username>")
     print("  inbox [since_id]")
+    print("  /add-tg")
+    print("  /manage-tg [on|off]")
+    print("  me")
+    print("  logout")
     print("  exit")
 
 
@@ -216,6 +339,8 @@ COMMANDS = {
     "server": cmd_set_server,
     "register": cmd_register,
     "login": cmd_login,
+    "chat": cmd_chat,
+    "open": cmd_chat,
     "logout": cmd_logout,
     "add-tg": cmd_add_tg,
     "manage-tg": cmd_manage_tg,
@@ -228,7 +353,8 @@ COMMANDS = {
 
 def main():
     start_keepalive_once()
-    print("ChatOnRender terminal client. Type 'help' for commands.")
+    check_version_policy()
+    print(f"ChatOnRender terminal client v{CLIENT_VERSION}. Type 'help' for commands.")
     while True:
         raw = input("> ").strip()
         if not raw:
@@ -258,4 +384,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
