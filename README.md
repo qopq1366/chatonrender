@@ -1,5 +1,5 @@
 # ChatOnRender
-
+# Проект больше не актуален
 MVP мессенджер: backend для Render free + Python terminal клиент.
 
 ## Стек
